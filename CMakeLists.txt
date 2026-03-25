@@ -36,7 +36,7 @@ include_directories(include ${PCL_INCLUDE_DIRS})
 link_directories(${PCL_LIBRARY_DIRS})
 add_definitions(${PCL_DEFINITIONS})
 
-add_library(scan_lock_component SHARED src/scan_lock.cpp)
+add_library(scan_lock_component SHARED src/scan_lock.cpp src/gicp.cpp)
 target_compile_features(scan_lock_component PUBLIC cxx_std_20)
 target_link_libraries(scan_lock_component ${PCL_LIBRARIES})
 

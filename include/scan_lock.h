@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <mutex>
 #include <string>
 
@@ -17,10 +18,9 @@
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2_ros/transform_listener.h>
 
-namespace scan_lock {
+#include "matching_algorithm.h"
 
-using PointType = pcl::PointXYZINormal;
-using PointCloud = pcl::PointCloud<PointType>;
+namespace scan_lock {
 
 enum class State {
   WAITING_FOR_TF,
@@ -33,20 +33,22 @@ public:
   explicit ScanLockNode(const rclcpp::NodeOptions& options = rclcpp::NodeOptions());
 
 private:
-  // --- Registration methods (stubs for now) ---
+  // --- Registration methods ---
 
-  /// Perform global registration of scan against map using an initial guess.
-  /// Returns true on success, populating result with the map_T_body transform.
+  /// Perform global registration of scan (odom frame) against map (map frame).
+  /// Uses map_T_odom_ as initial guess. Returns true on success, populating
+  /// result with the refined map_T_odom.
   bool global_registration(const PointCloud::ConstPtr& scan,
                            const PointCloud::ConstPtr& map,
-                           const Eigen::Matrix4d& initial_guess,
+                           const Eigen::Matrix4d& odom_T_imu,
                            Eigen::Matrix4d& result);
 
-  /// Perform local registration using current pose estimate as initial guess.
-  /// Returns true on success, populating result with the refined map_T_body.
+  /// Perform local registration of scan (odom frame) against map (map frame).
+  /// Uses map_T_odom_ as initial guess. Returns true on success, populating
+  /// result with the refined map_T_odom.
   bool local_registration(const PointCloud::ConstPtr& scan,
                           const PointCloud::ConstPtr& map,
-                          const Eigen::Matrix4d& initial_guess,
+                          const Eigen::Matrix4d& odom_T_imu,
                           Eigen::Matrix4d& result);
 
   // --- Callbacks ---
@@ -60,15 +62,9 @@ private:
   /// Attempt global registration with the latest scan. Throws on failure.
   void attempt_global_registration();
 
-  /// Look up the odom -> body transform from tf2.
-  bool lookup_odom_to_body(Eigen::Matrix4d& odom_T_body,
-                           const rclcpp::Time& stamp);
-
-  /// Look up the body -> imu transform from tf2 (cached after first success).
-  bool lookup_body_T_imu();
-
-  /// Transform a scan from imu frame to body frame. Returns nullptr on failure.
-  PointCloud::Ptr transform_scan_to_body(const PointCloud::ConstPtr& scan_imu);
+  /// Look up the odom -> imu transform from tf2.
+  bool lookup_odom_T_imu(Eigen::Matrix4d& odom_T_imu,
+                          const rclcpp::Time& stamp);
 
   /// Publish the map -> odom transform via tf2.
   void publish_map_to_odom(const Eigen::Matrix4d& map_T_odom,
@@ -81,6 +77,9 @@ private:
   static Eigen::Matrix4d pose_to_matrix(double x, double y, double z,
                                         double roll, double pitch, double yaw);
 
+  /// Rebuild submap if sensor has moved beyond threshold.
+  void maybe_rebuild_submap(const Eigen::Vector3d& sensor_map);
+
   // --- State machine ---
   State state_{State::WAITING_FOR_TF};
 
@@ -89,12 +88,19 @@ private:
   std::mutex scan_mutex_;
   sensor_msgs::msg::PointCloud2::ConstSharedPtr latest_scan_;
 
+  // --- Submap ---
+  PointCloud::Ptr submap_;
+  Eigen::Vector2d submap_center_{0.0, 0.0};
+  double submap_half_extent_{50.0};
+  double submap_rebuild_threshold_{20.0};
+  bool submap_valid_{false};
+
   // --- Transforms ---
-  Eigen::Matrix4d map_T_body_{Eigen::Matrix4d::Identity()};
   Eigen::Matrix4d map_T_odom_{Eigen::Matrix4d::Identity()};
   Eigen::Matrix4d initial_guess_{Eigen::Matrix4d::Identity()};
-  Eigen::Matrix4d body_T_imu_{Eigen::Matrix4d::Identity()};
-  bool have_body_T_imu_{false};
+
+  // --- Matching algorithm ---
+  std::unique_ptr<MatchingAlgorithm> matching_algorithm_;
 
   // --- ROS interfaces ---
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_lidar_;
@@ -114,6 +120,8 @@ private:
   std::string body_frame_;
   std::string imu_frame_;
   double timer_period_s_;
+  double scan_max_range_{20.0};
+  double local_map_radius_{30.0};
 
   // --- Initial guess ---
   bool use_default_guess_{false};
@@ -124,6 +132,8 @@ private:
   double ground_search_radius_x_{5.0};
   double ground_search_radius_y_{5.0};
   double ground_percentile_{0.05};
+  bool registration_timing_{false};
+  bool correct_roll_pitch_{true};
 };
 
 }  // namespace scan_lock

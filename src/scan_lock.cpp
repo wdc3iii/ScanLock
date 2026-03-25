@@ -1,4 +1,5 @@
 #include "scan_lock.h"
+#include "gicp.h"
 
 #include <pcl/io/pcd_io.h>
 #include <pcl/filters/voxel_grid.h>
@@ -11,11 +12,18 @@ namespace scan_lock {
 
 ScanLockNode::ScanLockNode(const rclcpp::NodeOptions& options)
     : Node("scan_lock", options),
-      map_cloud_(std::make_shared<PointCloud>()) {
+      map_cloud_(std::make_shared<PointCloud>()),
+      submap_(std::make_shared<PointCloud>()),
+      matching_algorithm_(std::make_unique<GICP>()) {
   // Declare parameters
   std::string pcd_file_name =
       declare_parameter<std::string>("scan_lock.pcd_file_name", "");
   timer_period_s_ = declare_parameter<double>("scan_lock.register_period_s", 1.0);
+  scan_max_range_ = declare_parameter<double>("scan_lock.scan_max_range", 20.0);
+  local_map_radius_ = declare_parameter<double>("scan_lock.local_map_radius", 30.0);
+  submap_half_extent_ = declare_parameter<double>("scan_lock.submap_half_extent", 50.0);
+  submap_rebuild_threshold_ = declare_parameter<double>("scan_lock.submap_rebuild_threshold", 20.0);
+
   map_frame_ = declare_parameter<std::string>("frames.map_frame", "map");
   odom_frame_ = declare_parameter<std::string>("frames.odom_frame", "odom");
   body_frame_ = declare_parameter<std::string>("frames.body_frame", "body");
@@ -38,6 +46,8 @@ ScanLockNode::ScanLockNode(const rclcpp::NodeOptions& options)
   ground_search_radius_x_ = declare_parameter<double>("initial_guess.ground_search_radius_x", 5.0);
   ground_search_radius_y_ = declare_parameter<double>("initial_guess.ground_search_radius_y", 5.0);
   ground_percentile_ = declare_parameter<double>("initial_guess.ground_percentile", 0.05);
+  registration_timing_ = declare_parameter<bool>("scan_lock.registration_timing", false);
+  correct_roll_pitch_ = declare_parameter<bool>("scan_lock.correct_roll_pitch", true);
 
   if (use_default_guess_) {
     initial_guess_ = pose_to_matrix(x, y, z, roll, pitch, yaw);
@@ -87,7 +97,6 @@ ScanLockNode::ScanLockNode(const rclcpp::NodeOptions& options)
   // Publish initial identity map -> odom so the TF tree is defined immediately
   publish_map_to_odom(Eigen::Matrix4d::Identity(), this->now());
 
-
   // Subscribe to lidar point cloud
   sub_lidar_ = create_subscription<sensor_msgs::msg::PointCloud2>(
       lidar_topic_, rclcpp::SensorDataQoS(),
@@ -105,61 +114,106 @@ ScanLockNode::ScanLockNode(const rclcpp::NodeOptions& options)
 
   if (have_initial_guess_) {
     RCLCPP_INFO(get_logger(), "ScanLock initialized (config initial guess). Waiting for %s -> %s...",
-                odom_frame_.c_str(), body_frame_.c_str());
+                odom_frame_.c_str(), imu_frame_.c_str());
   } else {
     RCLCPP_INFO(get_logger(), "ScanLock initialized. Waiting for /initialpose and %s -> %s...",
-                odom_frame_.c_str(), body_frame_.c_str());
+                odom_frame_.c_str(), imu_frame_.c_str());
   }
 }
 
 // ---------------------------------------------------------------------------
-// Registration stubs
+// Registration
 // ---------------------------------------------------------------------------
 
 bool ScanLockNode::global_registration(
     const PointCloud::ConstPtr& scan,
     const PointCloud::ConstPtr& map,
-    const Eigen::Matrix4d& initial_guess,
+    const Eigen::Matrix4d& odom_T_imu,
     Eigen::Matrix4d& result) {
-  // TODO: Implement global point cloud registration (e.g., FPFH + RANSAC, NDT
-  // with wide search, or other coarse alignment method).
-  //
-  // Inputs:
-  //   scan          - current lidar scan (in body frame)
-  //   map           - pre-built map point cloud (in map frame)
-  //   initial_guess - 4x4 transform: initial estimate of map_T_body
-  //
-  // Output:
-  //   result - refined 4x4 map_T_body transform
-  //
-  // Return true on success, false on failure.
-
-  // TODO: update roll/pitch of initial guess to reflect actual roll and pitch of the robot. This assumes that the map is gravity aligned. (make a flag for this in the config)
-  // note that the map is made such that the LiDAR frame is level, not the body frame. So you may need to add the the lidar frame here, and compute the roll and pitch
-  // so that the lidar frame is level with the ground.
-  local_registration(scan, map, initial_guess, result);
-  return true;
+  // Global registration delegates to local_registration for now.
+  // A future implementation could use FPFH + RANSAC for coarse alignment.
+  return local_registration(scan, map, odom_T_imu, result);
 }
 
 bool ScanLockNode::local_registration(
-    const PointCloud::ConstPtr& /*scan*/,
-    const PointCloud::ConstPtr& /*map*/,
-    const Eigen::Matrix4d& initial_guess,
+    const PointCloud::ConstPtr& scan,
+    const PointCloud::ConstPtr& map,
+    const Eigen::Matrix4d& odom_T_imu,
     Eigen::Matrix4d& result) {
-  // TODO: Implement local point cloud registration (e.g., ICP, NDT with tight
-  // convergence criteria).
-  //
-  // Inputs:
-  //   scan          - current lidar scan (in body frame)
-  //   map           - pre-built map point cloud (in map frame)
-  //   initial_guess - 4x4 transform: current estimate of map_T_body
-  //
-  // Output:
-  //   result - refined 4x4 map_T_body transform
-  //
-  // Return true on success, false on failure.
 
-  result = initial_guess;
+  auto start = std::chrono::steady_clock::now();
+
+  // 1. Current estimate (initial guess for GICP)
+  Eigen::Matrix4d map_T_odom_est = map_T_odom_;
+
+  // 2. Sensor position in odom frame and map frame
+  Eigen::Vector3d sensor_odom = odom_T_imu.block<3,1>(0,3);
+  Eigen::Vector4d sensor_odom_h;
+  sensor_odom_h << sensor_odom, 1.0;
+  Eigen::Vector3d sensor_map = (map_T_odom_est * sensor_odom_h).head<3>();
+
+  // 3. Rebuild submap if needed
+  maybe_rebuild_submap(sensor_map);
+
+  // 4. Distance-filter scan in odom frame (keep points near sensor)
+  auto scan_filtered = std::make_shared<PointCloud>();
+  double range_sq = scan_max_range_ * scan_max_range_;
+  for (const auto& pt : scan->points) {
+    double dx = pt.x - sensor_odom(0);
+    double dy = pt.y - sensor_odom(1);
+    double dz = pt.z - sensor_odom(2);
+    if (dx*dx + dy*dy + dz*dz < range_sq) {
+      scan_filtered->points.push_back(pt);
+    }
+  }
+  scan_filtered->width = scan_filtered->points.size();
+  scan_filtered->height = 1;
+  scan_filtered->is_dense = scan->is_dense;
+
+  if (scan_filtered->empty()) {
+    RCLCPP_WARN(get_logger(), "No scan points within %.1fm of sensor", scan_max_range_);
+    return false;
+  }
+
+  // 5. Crop map (submap) in map frame (keep points near sensor)
+  auto map_cropped = std::make_shared<PointCloud>();
+  double map_range_sq = local_map_radius_ * local_map_radius_;
+  const auto& map_source = submap_valid_ ? submap_ : map;
+  for (const auto& pt : map_source->points) {
+    double dx = pt.x - sensor_map(0);
+    double dy = pt.y - sensor_map(1);
+    double dz = pt.z - sensor_map(2);
+    if (dx*dx + dy*dy + dz*dz < map_range_sq) {
+      map_cropped->points.push_back(pt);
+    }
+  }
+  map_cropped->width = map_cropped->points.size();
+  map_cropped->height = 1;
+  map_cropped->is_dense = map_source->is_dense;
+
+  if (map_cropped->empty()) {
+    RCLCPP_WARN(get_logger(), "No map points within %.1fm of sensor position", local_map_radius_);
+    return false;
+  }
+
+  // 6. Run matching algorithm
+  Eigen::Matrix4f T;
+  if (!matching_algorithm_->align(scan_filtered, map_cropped,
+                                   map_T_odom_est.cast<float>(), T)) {
+    RCLCPP_WARN(get_logger(), "Matching algorithm failed to converge");
+    return false;
+  }
+
+  // 7. Result is directly the refined map_T_odom
+  result = T.cast<double>();
+
+  if (registration_timing_) {
+    auto end = std::chrono::steady_clock::now();
+    double elapsed = std::chrono::duration<double>(end - start).count();
+    RCLCPP_INFO(get_logger(), "Registration: %.3fs (scan=%zu, map=%zu)",
+                elapsed, scan_filtered->size(), map_cropped->size());
+  }
+
   return true;
 }
 
@@ -176,20 +230,16 @@ void ScanLockNode::lidar_callback(
 
   switch (state_) {
     case State::WAITING_FOR_TF: {
-      Eigen::Matrix4d odom_T_body;
-      if (lookup_odom_to_body(odom_T_body, msg->header.stamp)) {
+      // Check if odom -> imu TF is available
+      Eigen::Matrix4d odom_T_imu;
+      if (lookup_odom_T_imu(odom_T_imu, msg->header.stamp)) {
         if (have_initial_guess_) {
-          RCLCPP_INFO(get_logger(), "TF %s -> %s available. Attempting global registration...",
-                      odom_frame_.c_str(), body_frame_.c_str());
           state_ = State::GLOBAL_REGISTRATION;
-          attempt_global_registration();
+          RCLCPP_INFO(get_logger(), "TF available. Moving to GLOBAL_REGISTRATION.");
         } else {
           RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000,
-              "TF available. Waiting for /initialpose...");
+              "TF available but waiting for /initialpose...");
         }
-      } else {
-        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
-            "Waiting for TF %s -> %s...", odom_frame_.c_str(), body_frame_.c_str());
       }
       break;
     }
@@ -220,34 +270,23 @@ void ScanLockNode::timer_callback() {
     return;
   }
 
-  // Convert ROS message to PCL
-  auto scan_imu = std::make_shared<PointCloud>();
-  pcl::fromROSMsg(*scan_msg, *scan_imu);
+  // Convert ROS message to PCL (scan is in odom frame)
+  auto scan_odom = std::make_shared<PointCloud>();
+  pcl::fromROSMsg(*scan_msg, *scan_odom);
 
-  // Transform scan from imu frame to body frame
-  auto scan = transform_scan_to_body(scan_imu);
-  if (!scan) {
-    RCLCPP_WARN(get_logger(), "Failed to transform scan to body frame");
-    return;
-  }
-
-  // Look up current odom -> body transform
-  Eigen::Matrix4d odom_T_body;
-  if (!lookup_odom_to_body(odom_T_body, scan_msg->header.stamp)) {
+  // Look up current odom -> imu transform (for sensor position)
+  Eigen::Matrix4d odom_T_imu;
+  if (!lookup_odom_T_imu(odom_T_imu, scan_msg->header.stamp)) {
     RCLCPP_WARN(get_logger(), "Lost TF %s -> %s during local registration",
-                odom_frame_.c_str(), body_frame_.c_str());
+                odom_frame_.c_str(), imu_frame_.c_str());
     return;
   }
-
-  // Current estimate of body in map: map_T_odom * odom_T_body
-  Eigen::Matrix4d current_guess = map_T_odom_ * odom_T_body;
 
   Eigen::Matrix4d result;
-  if (local_registration(scan, map_cloud_, current_guess, result)) {
-    map_T_body_ = result;
-    map_T_odom_ = map_T_body_ * odom_T_body.inverse();
+  if (local_registration(scan_odom, map_cloud_, odom_T_imu, result)) {
+    map_T_odom_ = result;
     publish_map_to_odom(map_T_odom_, scan_msg->header.stamp);
-    RCLCPP_INFO(get_logger(), "Local registration succeeded. Updated pose in map.");
+    RCLCPP_INFO(get_logger(), "Local registration succeeded. Updated map_T_odom.");
   } else {
     RCLCPP_WARN(get_logger(),
                 "Local registration failed. Falling back to global registration.");
@@ -270,30 +309,53 @@ void ScanLockNode::attempt_global_registration() {
     return;
   }
 
-  // Convert ROS message to PCL
-  auto scan_imu = std::make_shared<PointCloud>();
-  pcl::fromROSMsg(*scan_msg, *scan_imu);
+  // Convert ROS message to PCL (scan is in odom frame)
+  auto scan_odom = std::make_shared<PointCloud>();
+  pcl::fromROSMsg(*scan_msg, *scan_odom);
 
-  // Transform scan from imu frame to body frame
-  auto scan = transform_scan_to_body(scan_imu);
-  if (!scan) {
-    RCLCPP_WARN(get_logger(), "Failed to transform scan to body frame during global registration");
-    state_ = State::WAITING_FOR_TF;
-    return;
-  }
-
-  // Look up odom -> body
-  Eigen::Matrix4d odom_T_body;
-  if (!lookup_odom_to_body(odom_T_body, scan_msg->header.stamp)) {
+  // Look up odom -> imu
+  Eigen::Matrix4d odom_T_imu;
+  if (!lookup_odom_T_imu(odom_T_imu, scan_msg->header.stamp)) {
     RCLCPP_WARN(get_logger(), "TF lookup failed during global registration attempt");
     state_ = State::WAITING_FOR_TF;
     return;
   }
 
+  // initial_guess_ is map_T_imu from RViz (or config).
+  // Correct roll/pitch if enabled.
+  Eigen::Matrix4d map_T_imu_guess = initial_guess_;
+
+  if (correct_roll_pitch_) {
+    // Extract roll/pitch from odom_T_imu (odom is gravity-aligned)
+    Eigen::Matrix3d R_odom_imu = odom_T_imu.block<3,3>(0,0);
+    double odom_roll = std::atan2(R_odom_imu(2,1), R_odom_imu(2,2));
+    double odom_pitch = std::atan2(-R_odom_imu(2,0),
+        std::sqrt(R_odom_imu(2,1)*R_odom_imu(2,1) + R_odom_imu(2,2)*R_odom_imu(2,2)));
+
+    // Extract yaw from initial_guess_ and keep translation
+    Eigen::Matrix3d R_guess = map_T_imu_guess.block<3,3>(0,0);
+    double guess_yaw = std::atan2(R_guess(1,0), R_guess(0,0));
+
+    // Reconstruct rotation with corrected roll/pitch
+    Eigen::Matrix3d R_corrected =
+        (Eigen::AngleAxisd(guess_yaw, Eigen::Vector3d::UnitZ()) *
+         Eigen::AngleAxisd(odom_pitch, Eigen::Vector3d::UnitY()) *
+         Eigen::AngleAxisd(odom_roll, Eigen::Vector3d::UnitX()))
+            .toRotationMatrix();
+
+    map_T_imu_guess.block<3,3>(0,0) = R_corrected;
+
+    RCLCPP_INFO(get_logger(),
+        "Corrected initial guess roll/pitch from IMU: roll=%.2f deg, pitch=%.2f deg",
+        odom_roll * 180.0 / M_PI, odom_pitch * 180.0 / M_PI);
+  }
+
+  // Convert map_T_imu to map_T_odom for GICP initial guess
+  map_T_odom_ = map_T_imu_guess * odom_T_imu.inverse();
+
   Eigen::Matrix4d result;
-  if (global_registration(scan, map_cloud_, initial_guess_, result)) {
-    map_T_body_ = result;
-    map_T_odom_ = map_T_body_ * odom_T_body.inverse();
+  if (global_registration(scan_odom, map_cloud_, odom_T_imu, result)) {
+    map_T_odom_ = result;
     publish_map_to_odom(map_T_odom_, scan_msg->header.stamp);
     state_ = State::LOCALIZED;
     RCLCPP_INFO(get_logger(), "Global registration succeeded. Localized in map.");
@@ -303,51 +365,20 @@ void ScanLockNode::attempt_global_registration() {
   }
 }
 
-bool ScanLockNode::lookup_odom_to_body(Eigen::Matrix4d& odom_T_body,
-                                       const rclcpp::Time& stamp) {
+bool ScanLockNode::lookup_odom_T_imu(Eigen::Matrix4d& odom_T_imu,
+                                      const rclcpp::Time& stamp) {
   try {
     auto transform = tf_buffer_->lookupTransform(
-        odom_frame_, body_frame_, stamp,
+        odom_frame_, imu_frame_, stamp,
         rclcpp::Duration::from_seconds(0.1));
 
     Eigen::Isometry3d eigen_tf = tf2::transformToEigen(transform);
-    odom_T_body = eigen_tf.matrix();
+    odom_T_imu = eigen_tf.matrix();
     return true;
   } catch (const tf2::TransformException& ex) {
     RCLCPP_DEBUG(get_logger(), "TF lookup failed: %s", ex.what());
     return false;
   }
-}
-
-bool ScanLockNode::lookup_body_T_imu() {
-  try {
-    auto transform = tf_buffer_->lookupTransform(
-        body_frame_, imu_frame_, rclcpp::Time(0),
-        rclcpp::Duration::from_seconds(1.0));
-
-    Eigen::Isometry3d eigen_tf = tf2::transformToEigen(transform);
-    body_T_imu_ = eigen_tf.matrix();
-    have_body_T_imu_ = true;
-    RCLCPP_INFO(get_logger(), "Cached %s -> %s transform",
-                body_frame_.c_str(), imu_frame_.c_str());
-    return true;
-  } catch (const tf2::TransformException& ex) {
-    RCLCPP_DEBUG(get_logger(), "body_T_imu lookup failed: %s", ex.what());
-    return false;
-  }
-}
-
-PointCloud::Ptr ScanLockNode::transform_scan_to_body(
-    const PointCloud::ConstPtr& scan_imu) {
-  if (!have_body_T_imu_) {
-    if (!lookup_body_T_imu()) {
-      return nullptr;
-    }
-  }
-  auto scan_body = std::make_shared<PointCloud>();
-  Eigen::Matrix4f body_T_imu_f = body_T_imu_.cast<float>();
-  pcl::transformPointCloudWithNormals(*scan_imu, *scan_body, body_T_imu_f);
-  return scan_body;
 }
 
 void ScanLockNode::initialpose_callback(
@@ -378,6 +409,7 @@ void ScanLockNode::initialpose_callback(
   // Trigger (re-)localization
   if (state_ == State::LOCALIZED || state_ == State::GLOBAL_REGISTRATION) {
     state_ = State::GLOBAL_REGISTRATION;
+    submap_valid_ = false;  // Force submap rebuild on re-localization
     RCLCPP_INFO(get_logger(), "Re-entering global registration with new initial pose.");
   }
 }
@@ -431,6 +463,38 @@ Eigen::Matrix4d ScanLockNode::pose_to_matrix(double x, double y, double z,
        Eigen::AngleAxisd(roll, Eigen::Vector3d::UnitX()))
           .toRotationMatrix();
   return transform.matrix();
+}
+
+void ScanLockNode::maybe_rebuild_submap(const Eigen::Vector3d& sensor_map) {
+  Eigen::Vector2d sensor_xy(sensor_map(0), sensor_map(1));
+
+  if (submap_valid_) {
+    Eigen::Vector2d delta = sensor_xy - submap_center_;
+    if (std::abs(delta(0)) < submap_rebuild_threshold_ &&
+        std::abs(delta(1)) < submap_rebuild_threshold_) {
+      return;  // Submap still valid
+    }
+  }
+
+  // Rebuild submap
+  submap_->clear();
+  float cx = static_cast<float>(sensor_xy(0));
+  float cy = static_cast<float>(sensor_xy(1));
+  float half = static_cast<float>(submap_half_extent_);
+
+  for (const auto& pt : map_cloud_->points) {
+    if (std::abs(pt.x - cx) < half && std::abs(pt.y - cy) < half) {
+      submap_->points.push_back(pt);
+    }
+  }
+  submap_->width = submap_->points.size();
+  submap_->height = 1;
+  submap_->is_dense = map_cloud_->is_dense;
+  submap_center_ = sensor_xy;
+  submap_valid_ = true;
+
+  RCLCPP_INFO(get_logger(), "Rebuilt submap at (%.1f, %.1f): %zu points (half_extent=%.1fm)",
+              cx, cy, submap_->size(), submap_half_extent_);
 }
 
 }  // namespace scan_lock

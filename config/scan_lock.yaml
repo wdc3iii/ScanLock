@@ -4,6 +4,11 @@
       pcd_file_name: "caltech_0.pcd"  # PCD filename (relative to scan_lock/pcd/)
       register_period_s: 5.0           # Local registration timer period (seconds)
       map_viz_voxel_size: 0.25         # Voxel size (m) for map visualization downsample
+      scan_max_range: 20.0             # Max range (m) for scan distance filter
+      local_map_radius: 30.0           # Radius (m) for map cropping around sensor
+      submap_half_extent: 50.0         # Half-width (m) for submap extraction
+      submap_rebuild_threshold: 20.0   # Distance (m) before submap is rebuilt
+      correct_roll_pitch: true         # Use IMU roll/pitch for global registration initial guess
 
     frames:
       map_frame: "map"               # Map frame (parent of odom)
