@@ -38,6 +38,7 @@ ScanLockNode::ScanLockNode(const rclcpp::NodeOptions& options)
   ground_search_radius_x_ = declare_parameter<double>("initial_guess.ground_search_radius_x", 5.0);
   ground_search_radius_y_ = declare_parameter<double>("initial_guess.ground_search_radius_y", 5.0);
   ground_percentile_ = declare_parameter<double>("initial_guess.ground_percentile", 0.05);
+  registration_timing_ = declare_parameter<bool>("scan_lock.registration_timing", false);
 
   if (use_default_guess_) {
     initial_guess_ = pose_to_matrix(x, y, z, roll, pitch, yaw);
@@ -142,8 +143,8 @@ bool ScanLockNode::global_registration(
 }
 
 bool ScanLockNode::local_registration(
-    const PointCloud::ConstPtr& /*scan*/,
-    const PointCloud::ConstPtr& /*map*/,
+    const PointCloud::ConstPtr& scan,
+    const PointCloud::ConstPtr& map,
     const Eigen::Matrix4d& initial_guess,
     Eigen::Matrix4d& result) {
   // TODO: Implement local point cloud registration (e.g., ICP, NDT with tight
@@ -159,7 +160,28 @@ bool ScanLockNode::local_registration(
   //
   // Return true on success, false on failure.
 
+  if (registration_timing_) {
+    Timer registration_timer(true);
+    registration_timer.start();
+  }
+
+  // First, filter/transform point clouds
+  // Filter points beyond a certain distance in the scan cloud
+  // Transform map to body frame, and filter points beyond a certain distance.
+  // Possibly maintain a sub-map, so we don't have to iterate over the entire map cloud every time, and update the sub-map when necessary.
+
+  // Run the specified matching algorithm on the body frame data
+  matching_algorithm_(scan, map, initial_guess, result);
+
+  // Transform the result back to the map frame
+
+  // For now, just return the initial guess as a placeholder.
   result = initial_guess;
+
+  if (registration_timing_) {
+    registration_timer.stop();
+    RCLCPP_INFO(get_logger(), "Local registration took %.3f seconds", registration_timer.elapsed());
+  }
   return true;
 }
 

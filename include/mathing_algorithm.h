@@ -1,0 +1,1 @@
+// Abstract class for the body-frame scan-to-map registration algorithm.

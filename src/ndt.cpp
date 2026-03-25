@@ -1,0 +1,1 @@
+// Instantiate the NDT algorithm from PCL using the matching_algorithm.h interface

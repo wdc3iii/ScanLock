@@ -1,0 +1,1 @@
+// Instantiate the GICP algorithm from PCL using the matching_algorithm.h interface

@@ -1,0 +1,1 @@
+// Instantiate the small GICP algorithm from PCL using the matching_algorithm.h interface https://github.com/koide3/small_gicp?tab=readme-ov-file

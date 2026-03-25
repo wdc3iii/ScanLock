@@ -124,6 +124,7 @@ private:
   double ground_search_radius_x_{5.0};
   double ground_search_radius_y_{5.0};
   double ground_percentile_{0.05};
+  bool registration_timing_{false};
 };
 
 }  // namespace scan_lock
