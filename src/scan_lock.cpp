@@ -89,13 +89,13 @@ ScanLockNode::ScanLockNode(const rclcpp::NodeOptions& options)
                 map_cloud_->size(), downsampled->size(), map_voxel_size);
   }
 
-  // Set up tf2
-  tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
+  // Set up tf2 (static broadcaster -- transform persists until re-published)
+  tf_broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(this);
   tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
   tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
   // Publish initial identity map -> odom so the TF tree is defined immediately
-  publish_map_to_odom(Eigen::Matrix4d::Identity(), this->now());
+  publish_map_to_odom(Eigen::Matrix4d::Identity());
 
   // Subscribe to lidar point cloud
   sub_lidar_ = create_subscription<sensor_msgs::msg::PointCloud2>(
@@ -249,8 +249,6 @@ void ScanLockNode::lidar_callback(
       }
       break;
     case State::LOCALIZED:
-      // Rebroadcast map -> odom at lidar rate so RViz can resolve the frame
-      publish_map_to_odom(map_T_odom_, msg->header.stamp);
       break;
   }
 }
@@ -285,8 +283,8 @@ void ScanLockNode::timer_callback() {
   Eigen::Matrix4d result;
   if (local_registration(scan_odom, map_cloud_, odom_T_imu, result)) {
     map_T_odom_ = result;
-    publish_map_to_odom(map_T_odom_, scan_msg->header.stamp);
-    RCLCPP_INFO(get_logger(), "Local registration succeeded. Updated map_T_odom.");
+    publish_map_to_odom(map_T_odom_);
+    RCLCPP_DEBUG(get_logger(), "Local registration succeeded. Updated map_T_odom.");
   } else {
     RCLCPP_WARN(get_logger(),
                 "Local registration failed. Falling back to global registration.");
@@ -356,7 +354,7 @@ void ScanLockNode::attempt_global_registration() {
   Eigen::Matrix4d result;
   if (global_registration(scan_odom, map_cloud_, odom_T_imu, result)) {
     map_T_odom_ = result;
-    publish_map_to_odom(map_T_odom_, scan_msg->header.stamp);
+    publish_map_to_odom(map_T_odom_);
     state_ = State::LOCALIZED;
     RCLCPP_INFO(get_logger(), "Global registration succeeded. Localized in map.");
   } else {
@@ -442,11 +440,10 @@ double ScanLockNode::compute_ground_height(double x, double y) const {
   return ground_z;
 }
 
-void ScanLockNode::publish_map_to_odom(const Eigen::Matrix4d& map_T_odom,
-                                       const rclcpp::Time& stamp) {
+void ScanLockNode::publish_map_to_odom(const Eigen::Matrix4d& map_T_odom) {
   Eigen::Isometry3d iso(map_T_odom);
   geometry_msgs::msg::TransformStamped tf_msg = tf2::eigenToTransform(iso);
-  tf_msg.header.stamp = stamp;
+  tf_msg.header.stamp = this->now();
   tf_msg.header.frame_id = map_frame_;
   tf_msg.child_frame_id = odom_frame_;
   tf_broadcaster_->sendTransform(tf_msg);

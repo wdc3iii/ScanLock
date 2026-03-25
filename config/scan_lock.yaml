@@ -9,6 +9,7 @@
       submap_half_extent: 50.0         # Half-width (m) for submap extraction
       submap_rebuild_threshold: 20.0   # Distance (m) before submap is rebuilt
       correct_roll_pitch: true         # Use IMU roll/pitch for global registration initial guess
+      registration_timing: false       # Print registration timing info
 
     frames:
       map_frame: "map"               # Map frame (parent of odom)

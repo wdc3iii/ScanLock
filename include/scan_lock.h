@@ -15,7 +15,7 @@
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <tf2_ros/buffer.h>
-#include <tf2_ros/transform_broadcaster.h>
+#include <tf2_ros/static_transform_broadcaster.h>
 #include <tf2_ros/transform_listener.h>
 
 #include "matching_algorithm.h"
@@ -66,9 +66,9 @@ private:
   bool lookup_odom_T_imu(Eigen::Matrix4d& odom_T_imu,
                           const rclcpp::Time& stamp);
 
-  /// Publish the map -> odom transform via tf2.
-  void publish_map_to_odom(const Eigen::Matrix4d& map_T_odom,
-                           const rclcpp::Time& stamp);
+  /// Publish the map -> odom transform via tf2 static broadcaster.
+  /// Persists until the next call to this method.
+  void publish_map_to_odom(const Eigen::Matrix4d& map_T_odom);
 
   /// Compute robust ground height from map cloud at a given (x, y) location.
   double compute_ground_height(double x, double y) const;
@@ -108,7 +108,7 @@ private:
       sub_initialpose_;
   rclcpp::TimerBase::SharedPtr registration_timer_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_map_;
-  std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+  std::shared_ptr<tf2_ros::StaticTransformBroadcaster> tf_broadcaster_;
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
