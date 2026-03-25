@@ -135,7 +135,8 @@ bool ScanLockNode::global_registration(
   // Return true on success, false on failure.
 
   // TODO: update roll/pitch of initial guess to reflect actual roll and pitch of the robot. This assumes that the map is gravity aligned. (make a flag for this in the config)
-
+  // note that the map is made such that the LiDAR frame is level, not the body frame. So you may need to add the the lidar frame here, and compute the roll and pitch
+  // so that the lidar frame is level with the ground.
   local_registration(scan, map, initial_guess, result);
   return true;
 }
