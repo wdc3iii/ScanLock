@@ -12,6 +12,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
+#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2_ros/transform_listener.h>
@@ -51,6 +52,8 @@ private:
   // --- Callbacks ---
   void lidar_callback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg);
   void timer_callback();
+  void initialpose_callback(
+      const geometry_msgs::msg::PoseWithCovarianceStamped::ConstSharedPtr msg);
 
   // --- Helpers ---
 
@@ -70,6 +73,9 @@ private:
   /// Publish the map -> odom transform via tf2.
   void publish_map_to_odom(const Eigen::Matrix4d& map_T_odom,
                            const rclcpp::Time& stamp);
+
+  /// Compute robust ground height from map cloud at a given (x, y) location.
+  double compute_ground_height(double x, double y) const;
 
   /// Convert (x, y, z, roll, pitch, yaw) to a 4x4 homogeneous transform.
   static Eigen::Matrix4d pose_to_matrix(double x, double y, double z,
@@ -92,6 +98,8 @@ private:
 
   // --- ROS interfaces ---
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_lidar_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr
+      sub_initialpose_;
   rclcpp::TimerBase::SharedPtr registration_timer_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_map_;
   std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
@@ -106,6 +114,16 @@ private:
   std::string body_frame_;
   std::string imu_frame_;
   double timer_period_s_;
+
+  // --- Initial guess ---
+  bool use_default_guess_{false};
+  bool have_initial_guess_{false};
+  double default_roll_{0.0};
+  double default_pitch_{0.0};
+  double default_z_{0.0};
+  double ground_search_radius_x_{5.0};
+  double ground_search_radius_y_{5.0};
+  double ground_percentile_{0.05};
 };
 
 }  // namespace scan_lock

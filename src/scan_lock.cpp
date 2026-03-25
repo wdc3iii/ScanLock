@@ -5,6 +5,7 @@
 #include <pcl/common/transforms.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <tf2_eigen/tf2_eigen.hpp>
+#include <tf2/utils.h>
 
 namespace scan_lock {
 
@@ -28,7 +29,20 @@ ScanLockNode::ScanLockNode(const rclcpp::NodeOptions& options)
   double roll = declare_parameter<double>("initial_guess.roll", 0.0);
   double pitch = declare_parameter<double>("initial_guess.pitch", 0.0);
   double yaw = declare_parameter<double>("initial_guess.yaw", 0.0);
-  initial_guess_ = pose_to_matrix(x, y, z, roll, pitch, yaw);
+
+  default_roll_ = roll;
+  default_pitch_ = pitch;
+  default_z_ = z;
+
+  use_default_guess_ = declare_parameter<bool>("initial_guess.use_default", false);
+  ground_search_radius_x_ = declare_parameter<double>("initial_guess.ground_search_radius_x", 5.0);
+  ground_search_radius_y_ = declare_parameter<double>("initial_guess.ground_search_radius_y", 5.0);
+  ground_percentile_ = declare_parameter<double>("initial_guess.ground_percentile", 0.05);
+
+  if (use_default_guess_) {
+    initial_guess_ = pose_to_matrix(x, y, z, roll, pitch, yaw);
+    have_initial_guess_ = true;
+  }
 
   // Load the point cloud map from pcd/ directory
   if (pcd_file_name.empty()) {
@@ -79,13 +93,23 @@ ScanLockNode::ScanLockNode(const rclcpp::NodeOptions& options)
       lidar_topic_, rclcpp::SensorDataQoS(),
       std::bind(&ScanLockNode::lidar_callback, this, std::placeholders::_1));
 
+  // Subscribe to /initialpose (RViz 2D Pose Estimate) for interactive pose setting
+  sub_initialpose_ = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+      "/initialpose", rclcpp::QoS(1),
+      std::bind(&ScanLockNode::initialpose_callback, this, std::placeholders::_1));
+
   // Create registration timer
   registration_timer_ = create_wall_timer(
       std::chrono::duration<double>(timer_period_s_),
       std::bind(&ScanLockNode::timer_callback, this));
 
-  RCLCPP_INFO(get_logger(), "ScanLock initialized. Waiting for %s -> %s transform...",
-              odom_frame_.c_str(), body_frame_.c_str());
+  if (have_initial_guess_) {
+    RCLCPP_INFO(get_logger(), "ScanLock initialized (config initial guess). Waiting for %s -> %s...",
+                odom_frame_.c_str(), body_frame_.c_str());
+  } else {
+    RCLCPP_INFO(get_logger(), "ScanLock initialized. Waiting for /initialpose and %s -> %s...",
+                odom_frame_.c_str(), body_frame_.c_str());
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -151,18 +175,25 @@ void ScanLockNode::lidar_callback(
     case State::WAITING_FOR_TF: {
       Eigen::Matrix4d odom_T_body;
       if (lookup_odom_to_body(odom_T_body, msg->header.stamp)) {
-        RCLCPP_INFO(get_logger(), "TF %s -> %s available. Attempting global registration...",
-                    odom_frame_.c_str(), body_frame_.c_str());
-        state_ = State::GLOBAL_REGISTRATION;
-        attempt_global_registration();
+        if (have_initial_guess_) {
+          RCLCPP_INFO(get_logger(), "TF %s -> %s available. Attempting global registration...",
+                      odom_frame_.c_str(), body_frame_.c_str());
+          state_ = State::GLOBAL_REGISTRATION;
+          attempt_global_registration();
+        } else {
+          RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000,
+              "TF available. Waiting for /initialpose...");
+        }
       } else {
-        RCLCPP_WARN(get_logger(), "Waiting for TF %s -> %s to attempt global registration...",
-                odom_frame_.c_str(), body_frame_.c_str());
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+            "Waiting for TF %s -> %s...", odom_frame_.c_str(), body_frame_.c_str());
       }
       break;
     }
     case State::GLOBAL_REGISTRATION:
-      attempt_global_registration();
+      if (have_initial_guess_) {
+        attempt_global_registration();
+      }
       break;
     case State::LOCALIZED:
       // Rebroadcast map -> odom at lidar rate so RViz can resolve the frame
@@ -314,6 +345,66 @@ PointCloud::Ptr ScanLockNode::transform_scan_to_body(
   Eigen::Matrix4f body_T_imu_f = body_T_imu_.cast<float>();
   pcl::transformPointCloudWithNormals(*scan_imu, *scan_body, body_T_imu_f);
   return scan_body;
+}
+
+void ScanLockNode::initialpose_callback(
+    const geometry_msgs::msg::PoseWithCovarianceStamped::ConstSharedPtr msg) {
+  double x = msg->pose.pose.position.x;
+  double y = msg->pose.pose.position.y;
+
+  // Extract yaw from quaternion
+  tf2::Quaternion q(
+      msg->pose.pose.orientation.x, msg->pose.pose.orientation.y,
+      msg->pose.pose.orientation.z, msg->pose.pose.orientation.w);
+  double roll_unused, pitch_unused, yaw;
+  tf2::Matrix3x3(q).getRPY(roll_unused, pitch_unused, yaw);
+
+  // Compute ground height from map, add default body height offset
+  double ground_z = compute_ground_height(x, y);
+  double z = ground_z + default_z_;
+
+  // x/y/yaw from RViz, roll/pitch from config defaults,
+  // z from ground estimation + config offset
+  initial_guess_ = pose_to_matrix(x, y, z, default_roll_, default_pitch_, yaw);
+  have_initial_guess_ = true;
+
+  RCLCPP_INFO(get_logger(),
+      "Initial pose from RViz: x=%.2f y=%.2f z=%.2f (ground=%.2f + offset=%.2f) yaw=%.2f rad",
+      x, y, z, ground_z, default_z_, yaw);
+
+  // Trigger (re-)localization
+  if (state_ == State::LOCALIZED || state_ == State::GLOBAL_REGISTRATION) {
+    state_ = State::GLOBAL_REGISTRATION;
+    RCLCPP_INFO(get_logger(), "Re-entering global registration with new initial pose.");
+  }
+}
+
+double ScanLockNode::compute_ground_height(double x, double y) const {
+  std::vector<float> z_values;
+  z_values.reserve(1000);
+
+  for (const auto& pt : map_cloud_->points) {
+    if (std::abs(pt.x - static_cast<float>(x)) < ground_search_radius_x_ &&
+        std::abs(pt.y - static_cast<float>(y)) < ground_search_radius_y_) {
+      z_values.push_back(pt.z);
+    }
+  }
+
+  if (z_values.empty()) {
+    RCLCPP_WARN(get_logger(),
+        "No map points found near (%.2f, %.2f) within (%.1f x %.1f) region. Using z=0.",
+        x, y, ground_search_radius_x_, ground_search_radius_y_);
+    return 0.0;
+  }
+
+  size_t idx = static_cast<size_t>(ground_percentile_ * (z_values.size() - 1));
+  std::nth_element(z_values.begin(), z_values.begin() + idx, z_values.end());
+  double ground_z = z_values[idx];
+
+  RCLCPP_INFO(get_logger(),
+      "Ground height at (%.2f, %.2f): %.3f (%zu points in search region)",
+      x, y, ground_z, z_values.size());
+  return ground_z;
 }
 
 void ScanLockNode::publish_map_to_odom(const Eigen::Matrix4d& map_T_odom,

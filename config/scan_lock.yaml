@@ -15,9 +15,13 @@
       lidar_topic: "cloud_registered"  # Point cloud topic to subscribe to
 
     initial_guess:                   # Initial robot pose in map frame
+      use_default: false             # true = use x/y/z/rpy below; false = wait for /initialpose
       x: 0.0
       y: 0.0
-      z: 0.0
-      roll: 0.0                      # Radians
-      pitch: 0.0                     # Radians
+      z: 0.0                        # When use_default=false, this is body height above ground
+      roll: 0.0                      # Default roll (radians), used in both modes
+      pitch: 0.0                     # Default pitch (radians), used in both modes
       yaw: 0.0                       # Radians
+      ground_search_radius_x: 5.0   # Half-width (m) for ground height search region
+      ground_search_radius_y: 5.0   # Half-width (m) for ground height search region
+      ground_percentile: 0.05       # Robust ground z (5th percentile of z values)
