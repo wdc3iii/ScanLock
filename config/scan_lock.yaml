@@ -8,7 +8,8 @@
     frames:
       map_frame: "map"               # Map frame (parent of odom)
       odom_frame: "odom"             # Odom frame (published by spark_fast_lio)
-      lidar_frame: "imu"             # Child frame of odom (spark_fast_lio visualization_frame)
+      body_frame: "body"             # Body frame (child of imu via static TF)
+      imu_frame: "imu"              # IMU frame (child of odom, scan source frame)
 
     topics:
       lidar_topic: "cloud_registered"  # Point cloud topic to subscribe to

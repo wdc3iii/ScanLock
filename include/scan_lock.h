@@ -35,14 +35,14 @@ private:
   // --- Registration methods (stubs for now) ---
 
   /// Perform global registration of scan against map using an initial guess.
-  /// Returns true on success, populating result with the map_T_lidar transform.
+  /// Returns true on success, populating result with the map_T_body transform.
   bool global_registration(const PointCloud::ConstPtr& scan,
                            const PointCloud::ConstPtr& map,
                            const Eigen::Matrix4d& initial_guess,
                            Eigen::Matrix4d& result);
 
   /// Perform local registration using current pose estimate as initial guess.
-  /// Returns true on success, populating result with the refined map_T_lidar.
+  /// Returns true on success, populating result with the refined map_T_body.
   bool local_registration(const PointCloud::ConstPtr& scan,
                           const PointCloud::ConstPtr& map,
                           const Eigen::Matrix4d& initial_guess,
@@ -57,9 +57,15 @@ private:
   /// Attempt global registration with the latest scan. Throws on failure.
   void attempt_global_registration();
 
-  /// Look up the odom -> lidar transform from tf2.
-  bool lookup_odom_to_lidar(Eigen::Matrix4d& odom_T_lidar,
-                            const rclcpp::Time& stamp);
+  /// Look up the odom -> body transform from tf2.
+  bool lookup_odom_to_body(Eigen::Matrix4d& odom_T_body,
+                           const rclcpp::Time& stamp);
+
+  /// Look up the body -> imu transform from tf2 (cached after first success).
+  bool lookup_body_T_imu();
+
+  /// Transform a scan from imu frame to body frame. Returns nullptr on failure.
+  PointCloud::Ptr transform_scan_to_body(const PointCloud::ConstPtr& scan_imu);
 
   /// Publish the map -> odom transform via tf2.
   void publish_map_to_odom(const Eigen::Matrix4d& map_T_odom,
@@ -78,9 +84,11 @@ private:
   sensor_msgs::msg::PointCloud2::ConstSharedPtr latest_scan_;
 
   // --- Transforms ---
-  Eigen::Matrix4d map_T_lidar_{Eigen::Matrix4d::Identity()};
+  Eigen::Matrix4d map_T_body_{Eigen::Matrix4d::Identity()};
   Eigen::Matrix4d map_T_odom_{Eigen::Matrix4d::Identity()};
   Eigen::Matrix4d initial_guess_{Eigen::Matrix4d::Identity()};
+  Eigen::Matrix4d body_T_imu_{Eigen::Matrix4d::Identity()};
+  bool have_body_T_imu_{false};
 
   // --- ROS interfaces ---
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_lidar_;
@@ -95,7 +103,8 @@ private:
   std::string lidar_topic_;
   std::string map_frame_;
   std::string odom_frame_;
-  std::string lidar_frame_;
+  std::string body_frame_;
+  std::string imu_frame_;
   double timer_period_s_;
 };
 
