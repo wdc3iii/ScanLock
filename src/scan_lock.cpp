@@ -56,7 +56,7 @@ ScanLockNode::ScanLockNode(const rclcpp::NodeOptions& options)
     sensor_msgs::msg::PointCloud2 msg;
     pcl::toROSMsg(*downsampled, msg);
     msg.header.frame_id = map_frame_;
-    msg.header.stamp = this->now();
+    msg.header.stamp = rclcpp::Time(0, 0, this->get_clock()->get_clock_type());
     pub_map_->publish(msg);
 
     RCLCPP_INFO(get_logger(), "Published downsampled map (%zu -> %zu points, voxel %.2fm)",
@@ -163,7 +163,8 @@ void ScanLockNode::lidar_callback(
       attempt_global_registration();
       break;
     case State::LOCALIZED:
-      // Timer handles local registration
+      // Rebroadcast map -> odom at lidar rate so RViz can resolve the frame
+      publish_map_to_odom(map_T_odom_, msg->header.stamp);
       break;
   }
 }
