@@ -1,0 +1,21 @@
+/**:
+  ros__parameters:
+    scan_lock:
+      pcd_file_name: "caltech_0.pcd"  # PCD filename (relative to scan_lock/pcd/)
+      register_period_s: 5.0           # Local registration timer period (seconds)
+
+    frames:
+      map_frame: "map"               # Map frame (parent of odom)
+      odom_frame: "odom"             # Odom frame (published by spark_fast_lio)
+      lidar_frame: "imu"             # Child frame of odom (spark_fast_lio visualization_frame)
+
+    topics:
+      lidar_topic: "cloud_registered"  # Point cloud topic to subscribe to
+
+    initial_guess:                   # Initial robot pose in map frame
+      x: 0.0
+      y: 0.0
+      z: 0.0
+      roll: 0.0                      # Radians
+      pitch: 0.0                     # Radians
+      yaw: 0.0                       # Radians
