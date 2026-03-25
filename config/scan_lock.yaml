@@ -3,6 +3,7 @@
     scan_lock:
       pcd_file_name: "caltech_0.pcd"  # PCD filename (relative to scan_lock/pcd/)
       register_period_s: 5.0           # Local registration timer period (seconds)
+      map_viz_voxel_size: 0.5          # Voxel size (m) for map visualization downsample
 
     frames:
       map_frame: "map"               # Map frame (parent of odom)
