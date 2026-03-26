@@ -5,15 +5,15 @@
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/common/transforms.h>
 #include <pcl_conversions/pcl_conversions.h>
-#include <tf2_eigen/tf2_eigen.hpp>
+#include <tf2_eigen/tf2_eigen.h>
 #include <tf2/utils.h>
 
 namespace scan_lock {
 
 ScanLockNode::ScanLockNode(const rclcpp::NodeOptions& options)
     : Node("scan_lock", options),
-      map_cloud_(std::make_shared<PointCloud>()),
-      submap_(std::make_shared<PointCloud>()),
+      map_cloud_(PointCloud::Ptr(new PointCloud())),
+      submap_(PointCloud::Ptr(new PointCloud())),
       matching_algorithm_(std::make_unique<GICP>()) {
   // Declare parameters
   std::string pcd_file_name =
@@ -73,7 +73,7 @@ ScanLockNode::ScanLockNode(const rclcpp::NodeOptions& options)
     auto qos = rclcpp::QoS(1).transient_local();
     pub_map_ = create_publisher<sensor_msgs::msg::PointCloud2>("map_cloud", qos);
 
-    auto downsampled = std::make_shared<PointCloud>();
+    PointCloud::Ptr downsampled(new PointCloud());
     pcl::VoxelGrid<PointType> voxel;
     voxel.setInputCloud(map_cloud_);
     voxel.setLeafSize(map_voxel_size, map_voxel_size, map_voxel_size);
@@ -156,7 +156,7 @@ bool ScanLockNode::local_registration(
   maybe_rebuild_submap(sensor_map);
 
   // 4. Distance-filter scan in odom frame (keep points near sensor)
-  auto scan_filtered = std::make_shared<PointCloud>();
+  PointCloud::Ptr scan_filtered(new PointCloud());
   double range_sq = scan_max_range_ * scan_max_range_;
   for (const auto& pt : scan->points) {
     double dx = pt.x - sensor_odom(0);
@@ -176,7 +176,7 @@ bool ScanLockNode::local_registration(
   }
 
   // 5. Crop map (submap) in map frame (keep points near sensor)
-  auto map_cropped = std::make_shared<PointCloud>();
+  PointCloud::Ptr map_cropped(new PointCloud());
   double map_range_sq = local_map_radius_ * local_map_radius_;
   const auto& map_source = submap_valid_ ? submap_ : map;
   for (const auto& pt : map_source->points) {
@@ -269,7 +269,7 @@ void ScanLockNode::timer_callback() {
   }
 
   // Convert ROS message to PCL (scan is in odom frame)
-  auto scan_odom = std::make_shared<PointCloud>();
+  PointCloud::Ptr scan_odom(new PointCloud());
   pcl::fromROSMsg(*scan_msg, *scan_odom);
 
   // Look up current odom -> imu transform (for sensor position)
@@ -308,7 +308,7 @@ void ScanLockNode::attempt_global_registration() {
   }
 
   // Convert ROS message to PCL (scan is in odom frame)
-  auto scan_odom = std::make_shared<PointCloud>();
+  PointCloud::Ptr scan_odom(new PointCloud());
   pcl::fromROSMsg(*scan_msg, *scan_odom);
 
   // Look up odom -> imu
@@ -368,7 +368,7 @@ bool ScanLockNode::lookup_odom_T_imu(Eigen::Matrix4d& odom_T_imu,
   try {
     auto transform = tf_buffer_->lookupTransform(
         odom_frame_, imu_frame_, stamp,
-        rclcpp::Duration::from_seconds(0.1));
+        rclcpp::Duration(0, 100000000));
 
     Eigen::Isometry3d eigen_tf = tf2::transformToEigen(transform);
     odom_T_imu = eigen_tf.matrix();
