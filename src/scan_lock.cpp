@@ -4,14 +4,14 @@
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/common/transforms.h>
 #include <pcl_conversions/pcl_conversions.h>
-#include <tf2_eigen/tf2_eigen.hpp>
+#include <tf2_eigen/tf2_eigen.h>
 #include <tf2/utils.h>
 
 namespace scan_lock {
 
 ScanLockNode::ScanLockNode(const rclcpp::NodeOptions& options)
     : Node("scan_lock", options),
-      map_cloud_(std::make_shared<PointCloud>()) {
+      map_cloud_(PointCloud::Ptr(new PointCloud())) {
   // Declare parameters
   std::string pcd_file_name =
       declare_parameter<std::string>("scan_lock.pcd_file_name", "");
@@ -177,6 +177,7 @@ void ScanLockNode::lidar_callback(
   switch (state_) {
     case State::WAITING_FOR_TF: {
       Eigen::Matrix4d odom_T_body;
+      publish_map_to_odom(Eigen::Matrix4d::Identity(), this->now());
       if (lookup_odom_to_body(odom_T_body, msg->header.stamp)) {
         if (have_initial_guess_) {
           RCLCPP_INFO(get_logger(), "TF %s -> %s available. Attempting global registration...",
@@ -221,7 +222,7 @@ void ScanLockNode::timer_callback() {
   }
 
   // Convert ROS message to PCL
-  auto scan_imu = std::make_shared<PointCloud>();
+  PointCloud::Ptr scan_imu(new PointCloud());
   pcl::fromROSMsg(*scan_msg, *scan_imu);
 
   // Transform scan from imu frame to body frame
@@ -271,7 +272,7 @@ void ScanLockNode::attempt_global_registration() {
   }
 
   // Convert ROS message to PCL
-  auto scan_imu = std::make_shared<PointCloud>();
+  PointCloud::Ptr scan_imu(new PointCloud());
   pcl::fromROSMsg(*scan_msg, *scan_imu);
 
   // Transform scan from imu frame to body frame
@@ -344,7 +345,7 @@ PointCloud::Ptr ScanLockNode::transform_scan_to_body(
       return nullptr;
     }
   }
-  auto scan_body = std::make_shared<PointCloud>();
+  PointCloud::Ptr scan_body(new PointCloud());
   Eigen::Matrix4f body_T_imu_f = body_T_imu_.cast<float>();
   pcl::transformPointCloudWithNormals(*scan_imu, *scan_body, body_T_imu_f);
   return scan_body;
