@@ -66,6 +66,10 @@ private:
   bool lookup_odom_T_imu(Eigen::Matrix4d& odom_T_imu,
                           const rclcpp::Time& stamp);
 
+  /// Look up the odom -> body transform from tf2.
+  bool lookup_odom_T_body(Eigen::Matrix4d& odom_T_body,
+                           const rclcpp::Time& stamp);
+
   /// Publish the map -> odom transform via tf2 static broadcaster.
   /// Persists until the next call to this method.
   void publish_map_to_odom(const Eigen::Matrix4d& map_T_odom);

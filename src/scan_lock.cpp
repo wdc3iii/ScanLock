@@ -205,7 +205,10 @@ bool ScanLockNode::local_registration(
   }
 
   // 7. Result is directly the refined map_T_odom
+  // TODO: for debugging, just return the estimate (no scan matching).
+  // result = map_T_odom_est.cast<double>();
   result = T.cast<double>();
+
 
   if (registration_timing_) {
     auto end = std::chrono::steady_clock::now();
@@ -311,27 +314,35 @@ void ScanLockNode::attempt_global_registration() {
   auto scan_odom = std::make_shared<PointCloud>();
   pcl::fromROSMsg(*scan_msg, *scan_odom);
 
-  // Look up odom -> imu
-  Eigen::Matrix4d odom_T_imu;
-  if (!lookup_odom_T_imu(odom_T_imu, scan_msg->header.stamp)) {
-    RCLCPP_WARN(get_logger(), "TF lookup failed during global registration attempt");
+  // Look up odom -> body (for initial guess computation)
+  Eigen::Matrix4d odom_T_body;
+  if (!lookup_odom_T_body(odom_T_body, scan_msg->header.stamp)) {
+    RCLCPP_WARN(get_logger(), "TF lookup failed for odom -> body");
     state_ = State::WAITING_FOR_TF;
     return;
   }
 
-  // initial_guess_ is map_T_imu from RViz (or config).
+  // Look up odom -> imu (needed for sensor position in registration)
+  Eigen::Matrix4d odom_T_imu;
+  if (!lookup_odom_T_imu(odom_T_imu, scan_msg->header.stamp)) {
+    RCLCPP_WARN(get_logger(), "TF lookup failed for odom -> imu");
+    state_ = State::WAITING_FOR_TF;
+    return;
+  }
+
+  // initial_guess_ is map_T_body from RViz (or config).
   // Correct roll/pitch if enabled.
-  Eigen::Matrix4d map_T_imu_guess = initial_guess_;
+  Eigen::Matrix4d map_T_body_guess = initial_guess_;
 
   if (correct_roll_pitch_) {
-    // Extract roll/pitch from odom_T_imu (odom is gravity-aligned)
-    Eigen::Matrix3d R_odom_imu = odom_T_imu.block<3,3>(0,0);
-    double odom_roll = std::atan2(R_odom_imu(2,1), R_odom_imu(2,2));
-    double odom_pitch = std::atan2(-R_odom_imu(2,0),
-        std::sqrt(R_odom_imu(2,1)*R_odom_imu(2,1) + R_odom_imu(2,2)*R_odom_imu(2,2)));
+    // Extract roll/pitch from odom_T_body (odom is gravity-aligned)
+    Eigen::Matrix3d R_odom_body = odom_T_body.block<3,3>(0,0);
+    double odom_roll = std::atan2(R_odom_body(2,1), R_odom_body(2,2));
+    double odom_pitch = std::atan2(-R_odom_body(2,0),
+        std::sqrt(R_odom_body(2,1)*R_odom_body(2,1) + R_odom_body(2,2)*R_odom_body(2,2)));
 
     // Extract yaw from initial_guess_ and keep translation
-    Eigen::Matrix3d R_guess = map_T_imu_guess.block<3,3>(0,0);
+    Eigen::Matrix3d R_guess = map_T_body_guess.block<3,3>(0,0);
     double guess_yaw = std::atan2(R_guess(1,0), R_guess(0,0));
 
     // Reconstruct rotation with corrected roll/pitch
@@ -341,15 +352,17 @@ void ScanLockNode::attempt_global_registration() {
          Eigen::AngleAxisd(odom_roll, Eigen::Vector3d::UnitX()))
             .toRotationMatrix();
 
-    map_T_imu_guess.block<3,3>(0,0) = R_corrected;
+    map_T_body_guess.block<3,3>(0,0) = R_corrected;
 
     RCLCPP_INFO(get_logger(),
-        "Corrected initial guess roll/pitch from IMU: roll=%.2f deg, pitch=%.2f deg",
+        "Corrected initial guess roll/pitch from body odometry: roll=%.2f deg, pitch=%.2f deg",
         odom_roll * 180.0 / M_PI, odom_pitch * 180.0 / M_PI);
   }
 
-  // Convert map_T_imu to map_T_odom for GICP initial guess
-  map_T_odom_ = map_T_imu_guess * odom_T_imu.inverse();
+  // Convert map_T_body to map_T_odom:
+  //   map_T_body = map_T_odom * odom_T_body
+  //   => map_T_odom = map_T_body * odom_T_body^-1
+  map_T_odom_ = map_T_body_guess * odom_T_body.inverse();
 
   Eigen::Matrix4d result;
   if (global_registration(scan_odom, map_cloud_, odom_T_imu, result)) {
@@ -379,6 +392,22 @@ bool ScanLockNode::lookup_odom_T_imu(Eigen::Matrix4d& odom_T_imu,
   }
 }
 
+bool ScanLockNode::lookup_odom_T_body(Eigen::Matrix4d& odom_T_body,
+                                       const rclcpp::Time& stamp) {
+  try {
+    auto transform = tf_buffer_->lookupTransform(
+        odom_frame_, body_frame_, stamp,
+        rclcpp::Duration::from_seconds(0.1));
+
+    Eigen::Isometry3d eigen_tf = tf2::transformToEigen(transform);
+    odom_T_body = eigen_tf.matrix();
+    return true;
+  } catch (const tf2::TransformException& ex) {
+    RCLCPP_DEBUG(get_logger(), "TF lookup failed: %s", ex.what());
+    return false;
+  }
+}
+
 void ScanLockNode::initialpose_callback(
     const geometry_msgs::msg::PoseWithCovarianceStamped::ConstSharedPtr msg) {
   double x = msg->pose.pose.position.x;
@@ -395,8 +424,8 @@ void ScanLockNode::initialpose_callback(
   double ground_z = compute_ground_height(x, y);
   double z = ground_z + default_z_;
 
-  // x/y/yaw from RViz, roll/pitch from config defaults,
-  // z from ground estimation + config offset
+  // initial_guess_ is map_T_body: x/y/yaw from RViz, roll/pitch from config
+  // defaults, z from ground estimation + config offset
   initial_guess_ = pose_to_matrix(x, y, z, default_roll_, default_pitch_, yaw);
   have_initial_guess_ = true;
 
