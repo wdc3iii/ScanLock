@@ -99,7 +99,8 @@ ScanLockNode::ScanLockNode(const rclcpp::NodeOptions& options)
 
   // Subscribe to lidar point cloud
   sub_lidar_ = create_subscription<sensor_msgs::msg::PointCloud2>(
-      lidar_topic_, rclcpp::SensorDataQoS(),
+      lidar_topic_,
+      rclcpp::QoS(rclcpp::SystemDefaultsQoS().keep_last(1).durability_volatile()),
       std::bind(&ScanLockNode::lidar_callback, this, std::placeholders::_1));
 
   // Subscribe to /initialpose (RViz 2D Pose Estimate) for interactive pose setting
