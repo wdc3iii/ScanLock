@@ -68,9 +68,9 @@ ScanLockNode::ScanLockNode(const rclcpp::NodeOptions& options)
   RCLCPP_INFO(get_logger(), "Loaded map with %zu points from %s",
               map_cloud_->size(), pcd_file_path_.c_str());
 
-  // Publish downsampled map for visualization
+  // Publish downsampled map for visualization (latched so RViz gets it on subscribe)
   {
-    auto qos = rclcpp::QoS(1).durability_volatile();
+    auto qos = rclcpp::QoS(1).transient_local();
     pub_map_ = create_publisher<sensor_msgs::msg::PointCloud2>("map_cloud", qos);
 
     PointCloud::Ptr downsampled(new PointCloud());
