@@ -19,14 +19,14 @@ bool GICP::align(const PointCloud::ConstPtr& source,
 
   for (const float res : params_.resolutions) {
     // Voxel filter source
-    auto filtered_source = std::make_shared<PointCloud>();
+    PointCloud::Ptr filtered_source(new PointCloud());
     pcl::VoxelGrid<PointType> voxel;
     voxel.setLeafSize(res, res, res);
     voxel.setInputCloud(source);
     voxel.filter(*filtered_source);
 
     // Voxel filter target
-    auto filtered_target = std::make_shared<PointCloud>();
+    PointCloud::Ptr filtered_target(new PointCloud());
     voxel.setInputCloud(target);
     voxel.filter(*filtered_target);
 

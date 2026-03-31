@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.16)
 project(scan_lock)
 
 set(CMAKE_BUILD_TYPE "Release")
@@ -37,7 +37,7 @@ link_directories(${PCL_LIBRARY_DIRS})
 add_definitions(${PCL_DEFINITIONS})
 
 add_library(scan_lock_component SHARED src/scan_lock.cpp src/gicp.cpp)
-target_compile_features(scan_lock_component PUBLIC cxx_std_20)
+target_compile_features(scan_lock_component PUBLIC cxx_std_17)
 target_link_libraries(scan_lock_component ${PCL_LIBRARIES})
 
 ament_target_dependencies(scan_lock_component
