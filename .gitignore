@@ -42,3 +42,4 @@
 
 # Point cloud data files (keep directory, ignore contents)
 pcd/*.pcd
+*.ply
