@@ -16,15 +16,20 @@ def _pose_prompt_node(context):
         {'use_sim_time': LaunchConfiguration('use_sim_time')},
     ]
 
+    # A "-p" CLI override always takes precedence over any --params-file,
+    # unlike ordering between multiple --params-file entries (which is not
+    # reliably "last one wins" across rclcpp/launch_ros versions).
+    arguments = []
     pcd_file_name = context.launch_configurations.get('pcd_file_name', '')
     if pcd_file_name:
-        parameters.append({'pose_prompt.pcd_file_name': pcd_file_name})
+        arguments = ['--ros-args', '-p', f'pose_prompt.pcd_file_name:={pcd_file_name}']
 
     return [Node(
         package='scan_lock',
         executable='pose_prompt_node',
         name='pose_prompt',
         parameters=parameters,
+        arguments=arguments,
         output='screen',
     )]
 
