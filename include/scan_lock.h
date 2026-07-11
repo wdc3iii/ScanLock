@@ -111,7 +111,6 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr
       sub_initialpose_;
   rclcpp::TimerBase::SharedPtr registration_timer_;
-  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_map_;
   std::shared_ptr<tf2_ros::StaticTransformBroadcaster> tf_broadcaster_;
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;

@@ -55,10 +55,28 @@ rclcpp_components_register_node(scan_lock_component
   EXECUTABLE scan_lock_node
 )
 
+# pose_prompt_node: standalone coarse-to-fine RViz prompting helper, fully
+# independent of scan_lock_node (own PCD load, no TF/lidar dependency).
+add_executable(pose_prompt_node src/pose_prompt_node.cpp)
+target_compile_features(pose_prompt_node PUBLIC cxx_std_17)
+target_link_libraries(pose_prompt_node ${PCL_LIBRARIES})
+
+ament_target_dependencies(pose_prompt_node
+  rclcpp
+  sensor_msgs
+  geometry_msgs
+  pcl_conversions
+)
+
 install(
   TARGETS scan_lock_component
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
+
+install(
+  TARGETS pose_prompt_node
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 

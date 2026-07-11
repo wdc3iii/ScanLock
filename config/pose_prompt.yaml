@@ -1,0 +1,14 @@
+/**:
+  ros__parameters:
+    pose_prompt:
+      pcd_file_name: "caltech_0.pcd"    # PCD filename (relative to scan_lock/pcd/)
+      coarse_voxel_size: 2.0            # Voxel size (m) for the fast-orbiting full-map overview
+      fine_voxel_size: 0.05             # Voxel size (m) for the fine region crop (must be > 0)
+      fine_region_radius: 20.0          # Half-width (m) of the fine crop around a clicked point
+      fine_point_cap: 3000000           # Warn + coarsen fine crop if it exceeds this many points
+
+    frames:
+      map_frame: "map"                 # Map frame (parent of odom)
+
+    topics:
+      region_point_topic: "/clicked_point"  # RViz "Publish Point" tool topic (region select)

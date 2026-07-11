@@ -2,7 +2,6 @@
 #include "gicp.h"
 
 #include <pcl/io/pcd_io.h>
-#include <pcl/filters/voxel_grid.h>
 #include <pcl/common/transforms.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <tf2_eigen/tf2_eigen.hpp>
@@ -29,7 +28,6 @@ ScanLockNode::ScanLockNode(const rclcpp::NodeOptions& options)
   body_frame_ = declare_parameter<std::string>("frames.body_frame", "body");
   imu_frame_ = declare_parameter<std::string>("frames.imu_frame", "imu");
   lidar_topic_ = declare_parameter<std::string>("topics.lidar_topic", "cloud_registered");
-  double map_voxel_size = declare_parameter<double>("scan_lock.map_viz_voxel_size", 0.5);
 
   double x = declare_parameter<double>("initial_guess.x", 0.0);
   double y = declare_parameter<double>("initial_guess.y", 0.0);
@@ -67,27 +65,6 @@ ScanLockNode::ScanLockNode(const rclcpp::NodeOptions& options)
   }
   RCLCPP_INFO(get_logger(), "Loaded map with %zu points from %s",
               map_cloud_->size(), pcd_file_path_.c_str());
-
-  // Publish downsampled map for visualization (latched so RViz gets it on subscribe)
-  {
-    auto qos = rclcpp::QoS(1).transient_local();
-    pub_map_ = create_publisher<sensor_msgs::msg::PointCloud2>("map_cloud", qos);
-
-    auto downsampled = std::make_shared<PointCloud>();
-    pcl::VoxelGrid<PointType> voxel;
-    voxel.setInputCloud(map_cloud_);
-    voxel.setLeafSize(map_voxel_size, map_voxel_size, map_voxel_size);
-    voxel.filter(*downsampled);
-
-    sensor_msgs::msg::PointCloud2 msg;
-    pcl::toROSMsg(*downsampled, msg);
-    msg.header.frame_id = map_frame_;
-    msg.header.stamp = rclcpp::Time(0, 0, this->get_clock()->get_clock_type());
-    pub_map_->publish(msg);
-
-    RCLCPP_INFO(get_logger(), "Published downsampled map (%zu -> %zu points, voxel %.2fm)",
-                map_cloud_->size(), downsampled->size(), map_voxel_size);
-  }
 
   // Set up tf2 (static broadcaster -- transform persists until re-published)
   tf_broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(this);
