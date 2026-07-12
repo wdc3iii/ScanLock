@@ -16,20 +16,20 @@ PosePromptNode::PosePromptNode(const rclcpp::NodeOptions& options)
       declare_parameter<std::string>("pose_prompt.pcd_file_name", "");
   double coarse_voxel_size =
       declare_parameter<double>("pose_prompt.coarse_voxel_size", 2.0);
-  fine_voxel_size_ = declare_parameter<double>("pose_prompt.fine_voxel_size", 0.05);
+  fine_voxel_size_ = declare_parameter<double>("pose_prompt.fine_voxel_size", 0.2);
   fine_region_radius_ = declare_parameter<double>("pose_prompt.fine_region_radius", 20.0);
-  fine_point_cap_ = declare_parameter<int>("pose_prompt.fine_point_cap", 3000000);
+  fine_point_cap_ = declare_parameter<int>("pose_prompt.fine_point_cap", 1000000);
   map_frame_ = declare_parameter<std::string>("frames.map_frame", "map");
   std::string region_point_topic =
       declare_parameter<std::string>("topics.region_point_topic", "/clicked_point");
 
   if (fine_voxel_size_ <= 0.0) {
     RCLCPP_WARN(get_logger(),
-        "pose_prompt.fine_voxel_size must be > 0 (got %.4f); clamping to 0.05m. "
+        "pose_prompt.fine_voxel_size must be > 0 (got %.4f); clamping to 0.2m. "
         "A 0/full-resolution fine crop can produce multi-million-point latched "
         "messages that stall RViz and the network.",
         fine_voxel_size_);
-    fine_voxel_size_ = 0.05;
+    fine_voxel_size_ = 0.2;
   }
 
   if (pcd_file_name.empty()) {

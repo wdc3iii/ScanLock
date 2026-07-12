@@ -39,7 +39,7 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr sub_region_point_;
 
   std::string map_frame_;
-  double fine_voxel_size_{0.05};
+  double fine_voxel_size_{0.2};
   double fine_region_radius_{20.0};
-  int fine_point_cap_{3000000};
+  int fine_point_cap_{1000000};
 };
