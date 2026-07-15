@@ -1,5 +1,6 @@
 #include "scan_lock.h"
 #include "gicp.h"
+#include "pcd_path.h"
 
 #include <pcl/io/pcd_io.h>
 #include <pcl/common/transforms.h>
@@ -52,13 +53,19 @@ ScanLockNode::ScanLockNode(const rclcpp::NodeOptions& options)
     have_initial_guess_ = true;
   }
 
-  // Load the point cloud map from pcd/ directory
+  // Load the point cloud map (absolute path, $ENV-var path, or bare name
+  // resolved under the package pcd/ directory)
   if (pcd_file_name.empty()) {
     RCLCPP_FATAL(get_logger(), "No PCD file name specified (scan_lock.pcd_file_name)");
     throw std::runtime_error("No PCD file name specified");
   }
 
-  pcd_file_path_ = std::string(ROOT_DIR) + "pcd/" + pcd_file_name;
+  try {
+    pcd_file_path_ = pcd_path::resolve_pcd_path(pcd_file_name, ROOT_DIR);
+  } catch (const std::exception& e) {
+    RCLCPP_FATAL(get_logger(), "%s", e.what());
+    throw;
+  }
   if (pcl::io::loadPCDFile<PointType>(pcd_file_path_, *map_cloud_) == -1) {
     RCLCPP_FATAL(get_logger(), "Failed to load PCD file: %s", pcd_file_path_.c_str());
     throw std::runtime_error("Failed to load PCD file: " + pcd_file_path_);

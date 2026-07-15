@@ -1,4 +1,5 @@
 #include "pose_prompt_node.h"
+#include "pcd_path.h"
 
 #include <limits>
 
@@ -37,7 +38,13 @@ PosePromptNode::PosePromptNode(const rclcpp::NodeOptions& options)
     throw std::runtime_error("No PCD file name specified");
   }
 
-  std::string pcd_file_path = std::string(ROOT_DIR) + "pcd/" + pcd_file_name;
+  std::string pcd_file_path;
+  try {
+    pcd_file_path = pcd_path::resolve_pcd_path(pcd_file_name, ROOT_DIR);
+  } catch (const std::exception& e) {
+    RCLCPP_FATAL(get_logger(), "%s", e.what());
+    throw;
+  }
   if (pcl::io::loadPCDFile<PosePromptPointType>(pcd_file_path, *map_cloud_) == -1) {
     RCLCPP_FATAL(get_logger(), "Failed to load PCD file: %s", pcd_file_path.c_str());
     throw std::runtime_error("Failed to load PCD file: " + pcd_file_path);

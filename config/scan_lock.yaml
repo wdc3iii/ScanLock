@@ -1,7 +1,7 @@
 /**:
   ros__parameters:
     scan_lock:
-      pcd_file_name: "caltech_0.pcd"  # PCD filename (relative to scan_lock/pcd/)
+      pcd_file_name: "caltech_0.pcd"  # PCD map: rel. name (under <pkg>/pcd/), absolute path, or $ENV_VAR path
       register_period_s: 5.0           # Local registration timer period (seconds)
       scan_max_range: 20.0             # Max range (m) for scan distance filter
       local_map_radius: 30.0           # Radius (m) for map cropping around sensor
